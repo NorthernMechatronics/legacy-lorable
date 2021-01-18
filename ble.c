@@ -171,9 +171,9 @@ void ble_task(void *pvParameters)
     HciDrvRadioBoot(1);
     ble_cordio_init();
 
-//    AmotaStart();
+    AmotaStart();
     while (1) {
-//        wsfOsDispatcher();
+        wsfOsDispatcher();
     	taskYIELD();
     }
 }
