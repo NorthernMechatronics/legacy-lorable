@@ -1,7 +1,7 @@
 /*
  * BSD 3-Clause License
  *
- * Copyright (c) 2020, Northern Mechatronics, Inc.
+ * Copyright (c) 2021, Northern Mechatronics, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -36,16 +36,18 @@
 #include <LmHandler.h>
 #include <queue.h>
 
-typedef enum { JOIN = 0, RESET, SEND } application_command_e;
+typedef struct {
+    LmHandlerMsgTypes_t  message_type;
+    uint32_t             length; 
+    uint8_t             *buffer;
+    uint8_t              port;
+} lorawan_transaction_t;
 
 extern TaskHandle_t lorawan_task_handle;
-extern QueueHandle_t LoRaWANTaskQueue;
+extern QueueHandle_t lorawan_task_queue;
+
 extern void lorawan_task(void *pvParameters);
-
-#define LM_APPLICATION_PORT 1
-#define LM_BUFFER_SIZE 242
-
-extern uint8_t psLmDataBuffer[LM_BUFFER_SIZE];
-extern LmHandlerAppData_t LmAppData;
+extern void lorawan_join();
+extern void lorawan_send(lorawan_transaction_t *transaction);
 
 #endif /* _LORAWAN_H_ */

@@ -32,7 +32,7 @@ else
   RM   = $(shell which rm 2>/dev/null)
 endif
 
-DEFINES  = -Dgcc
+DEFINES += -Dgcc
 DEFINES += -DAM_PART_APOLLO3
 DEFINES += -DAM_PACKAGE_BGA
 DEFINES += -DPART_apollo3

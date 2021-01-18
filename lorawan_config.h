@@ -1,0 +1,21 @@
+#ifndef _LORAWAN_CONFIG_H_
+#define _LORAWAN_CONFIG_H_
+
+#define OVER_THE_AIR_ACTIVATION             1
+#define ABP_ACTIVATION_LRWAN_VERSION_V10x   0x01000300
+#define ABP_ACTIVATION_LRWAN_VERSION        ABP_ACTIVATION_LRWAN_VERSION_V10x
+#define LORAWAN_PUBLIC_NETWORK              true
+#define LORAWAN_NETWORK_ID                  (uint32_t)0
+#define ACTIVE_REGION                       LORAMAC_REGION_US915
+#define LORAWAN_DEFAULT_CLASS               CLASS_A
+#define LORAWAN_ADR_STATE                   LORAMAC_HANDLER_ADR_OFF
+#define LORAWAN_DEFAULT_DATARATE            DR_1
+#define LORAWAN_DEFAULT_CONFIRMED_MSG_STATE LORAMAC_HANDLER_UNCONFIRMED_MSG
+#define LORAWAN_APP_DATA_BUFFER_MAX_SIZE    242
+#define LORAWAN_DUTYCYCLE_ON                false
+#define LORAWAN_APP_PORT                    2
+
+#define APP_TX_DUTYCYCLE                    5000
+#define APP_TX_DUTYCYCLE_RND                1000
+
+#endif

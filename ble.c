@@ -73,7 +73,6 @@
 #include "task_message.h"
 
 TaskHandle_t ble_task_handle;
-QueueHandle_t ble_task_queue;
 
 #define WSF_BUF_POOLS               4
 static uint32_t g_pui32BufMem[
@@ -166,18 +165,16 @@ void ble_task(void *pvParameters)
 {
     NVIC_SetPriority(BLE_IRQn, NVIC_configMAX_SYSCALL_INTERRUPT_PRIORITY);
 
-    ble_task_queue = xQueueCreate(10, sizeof(task_message_t));
-
     am_util_stdio_printf("\r\n\r\nBLE Task Started\r\n\r\n");
     nm_console_print_prompt();
 
     HciDrvRadioBoot(1);
     ble_cordio_init();
 
-    AmotaStart();
-
+//    AmotaStart();
     while (1) {
-        wsfOsDispatcher();
+//        wsfOsDispatcher();
+    	taskYIELD();
     }
 }
 

@@ -1,7 +1,7 @@
 /*
  * BSD 3-Clause License
  *
- * Copyright (c) 2020, Northern Mechatronics, Inc.
+ * Copyright (c) 2021, Northern Mechatronics, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,12 +46,13 @@
 #include <LmHandler.h>
 #include <LmHandlerMsgDisplay.h>
 #include <LmhpCompliance.h>
-#include <NvmCtxMgmt.h>
+#include <NvmDataMgmt.h>
 #include <board.h>
 #include <timer.h>
 
 #include "lorawan.h"
 #include "lorawan_cli.h"
+#include "lorawan_config.h"
 #include "console_task.h"
 #include "task_message.h"
 
@@ -62,6 +63,8 @@ CLI_Command_Definition_t LoRaWANCommandDefinition = {
     (const char *const) "lorawan",
     (const char *const) "lorawan:\tLoRaWAN Application Framework.\r\n",
     prvLoRaWANCommand, -1};
+
+static uint8_t upload_buffer[LORAWAN_APP_DATA_BUFFER_MAX_SIZE];
 
 static void ConvertHexString(const char *in, size_t inlen, uint8_t *out,
                           size_t *outlen)
@@ -135,14 +138,22 @@ void prvLoRaWANSendSubCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
     const char *pcParameterString;
     portBASE_TYPE xParameterStringLength;
 
-    uint8_t port = LM_APPLICATION_PORT;
+    LmHandlerMsgTypes_t ack = LORAMAC_HANDLER_UNCONFIRMED_MSG;
+    uint8_t port = LORAWAN_APP_PORT;
     uint8_t argc = FreeRTOS_CLIGetNumberOfParameters(pcCommandString);
 
     pcParameterString =
         FreeRTOS_CLIGetParameter(pcCommandString, 2, &xParameterStringLength);
-    if (argc == 2) {
-        memcpy(psLmDataBuffer, pcParameterString, xParameterStringLength);
-    } else {
+    if (xParameterStringLength > LORAWAN_APP_DATA_BUFFER_MAX_SIZE)
+    {
+        xParameterStringLength = LORAWAN_APP_DATA_BUFFER_MAX_SIZE;
+    }
+
+    switch (argc) {
+    case 2:
+        memcpy(upload_buffer, pcParameterString, xParameterStringLength);
+        break;
+    case 3: {
         pcParameterString = FreeRTOS_CLIGetParameter(pcCommandString, 2,
                                                      &xParameterStringLength);
         if (pcParameterString == NULL) {
@@ -154,24 +165,35 @@ void prvLoRaWANSendSubCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
 
         pcParameterString = FreeRTOS_CLIGetParameter(pcCommandString, 3,
                                                      &xParameterStringLength);
-        memcpy(psLmDataBuffer, pcParameterString, xParameterStringLength);
+        memcpy(upload_buffer, pcParameterString, xParameterStringLength);
+    }
+        break;
+    case 4: {
+    pcParameterString = FreeRTOS_CLIGetParameter(pcCommandString, 2,
+                                                     &xParameterStringLength);
+        if (pcParameterString == NULL) {
+            strcat(pcWriteBuffer,
+                   "error: missing acknowledgement parameter\r\n");
+            return;
+        } else {
+            ack = atoi(pcParameterString) > 0 ? LORAMAC_HANDLER_CONFIRMED_MSG
+                                              : LORAMAC_HANDLER_UNCONFIRMED_MSG;
+        }
+    }
+        break;
     }
 
     size_t length;
-    ConvertHexString(pcParameterString, xParameterStringLength, psLmDataBuffer,
+    ConvertHexString(pcParameterString, xParameterStringLength, upload_buffer,
                   &length);
 
-    LmAppData.Port = port;
-    LmAppData.BufferSize = length;
-    LmAppData.Buffer = psLmDataBuffer;
+    lorawan_transaction_t transaction;
+    transaction.message_type = ack;
+    transaction.length = length;
+    transaction.buffer = upload_buffer;
+    transaction.port = port;
 
-    am_util_stdio_printf(psLmDataBuffer);
-    am_util_stdio_printf("\r\n");
-
-    task_message_t TaskMessage;
-    TaskMessage.ui32Event = SEND;
-    TaskMessage.psContent = &LmAppData;
-    xQueueSend(LoRaWANTaskQueue, &TaskMessage, portMAX_DELAY);
+    lorawan_send(&transaction);
 }
 
 portBASE_TYPE prvLoRaWANCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
@@ -193,9 +215,7 @@ portBASE_TYPE prvLoRaWANCommand(char *pcWriteBuffer, size_t xWriteBufferLen,
                                      pcCommandString);
     } else if (strncmp(pcParameterString, "join", xParameterStringLength) ==
                0) {
-        task_message_t TaskMessage;
-        TaskMessage.ui32Event = JOIN;
-        xQueueSend(LoRaWANTaskQueue, &TaskMessage, portMAX_DELAY);
+        lorawan_join();
     } else if (strncmp(pcParameterString, "reset", xParameterStringLength) == 0) {
         LoRaMacStop();
     } else if (strncmp(pcParameterString, "send", xParameterStringLength) ==

@@ -78,6 +78,7 @@ SRC += console_task.c
 SRC += gpio_service.c
 SRC += iom_service.c
 
+DEFINES += -DSOFT_SE
 SRC += aes.c
 SRC += cmac.c
 SRC += soft-se.c

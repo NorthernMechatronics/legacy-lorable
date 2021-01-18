@@ -38,6 +38,9 @@ else
     BSP_LIB  := -lam_bsp
 endif
 
+BSP_C := $(BSP_DIR)/am_bsp_pins.c
+BSP_H := $(BSP_DIR)/am_bsp_pins.h
+
 INCLUDES += -I$(BSP_DIR)
 INCLUDES += -I$(NM_SDK)/bsp/devices
 INCLUDES += -I$(NM_SDK)/platform
@@ -81,7 +84,7 @@ LFLAGS += --specs=nano.specs
 LFLAGS += --specs=nosys.specs
 LFLAGS += -Wl,--end-group
 
-all: directories bsp $(BUILDDIR)/$(TARGET).bin
+all: directories $(BUILDDIR)/$(TARGET).bin
 
 directories: $(BUILDDIR)
 
@@ -91,11 +94,15 @@ $(BUILDDIR):
 bsp:
 	$(MAKE) -C $(BSP_DIR) AMBIQ_SDK=$(AMBIQ_SDK)
 
-$(BUILDDIR)/%.o: %.c $(BUILDDIR)/%.d $(INCS)
+$(BSP_C): bsp
+
+$(BSP_H): bsp
+
+$(BUILDDIR)/%.o: %.c $(BUILDDIR)/%.d $(INCS) $(BSP_C) $(BSP_H)
 	@echo "Compiling $(COMPILERNAME) $<"
 	$(CC) -c $(CFLAGS) $< -o $@
 
-$(BUILDDIR)/%.o: %.s $(BUILDDIR)/%.d $(INCS)
+$(BUILDDIR)/%.o: %.s $(BUILDDIR)/%.d $(INCS) $(BSP_C) $(BSP_H)
 	@echo "Assembling $(COMPILERNAME) $<"
 	$(CC) -c $(CFLAGS) $< -o $@
 
@@ -111,6 +118,7 @@ clean:
 	@echo "Cleaning..."
 	$(RM) -f $(OBJS) $(DEPS) $(BUILDDIR)/$(TARGET).a
 	$(RM) -rf $(BUILDDIR)
+	$(MAKE) -C $(BSP_DIR) AMBIQ_SDK=$(AMBIQ_SDK) clean
 
 $(BUILDDIR)/%.d: ;
 

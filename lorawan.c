@@ -1,7 +1,7 @@
 /*
  * BSD 3-Clause License
  *
- * Copyright (c) 2020, Northern Mechatronics, Inc.
+ * Copyright (c) 2021, Northern Mechatronics, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,9 +31,9 @@
  */
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 #include <am_bsp.h>
 #include <am_mcu_apollo.h>
@@ -41,239 +41,76 @@
 
 #include <LmHandler.h>
 #include <LmHandlerMsgDisplay.h>
-#include <LmhpCompliance.h>
 #include <LmhpClockSync.h>
+#include <LmhpCompliance.h>
 #include <LmhpRemoteMcastSetup.h>
-#include <NvmCtxMgmt.h>
 #include <board.h>
-#include <timer.h>
 
 #include "lorawan.h"
 #include "lorawan_cli.h"
-#include "console_task.h"
+#include "lorawan_config.h"
 #include "task_message.h"
 
-TaskHandle_t lorawan_task_handle;
-QueueHandle_t LoRaWANTaskQueue;
+#define LORAWAN_EVENT_JOIN  0x01
 
-uint8_t psLmDataBuffer[LM_BUFFER_SIZE];
-LmHandlerAppData_t LmAppData;
+TaskHandle_t  lorawan_task_handle;
+QueueHandle_t lorawan_task_queue;
 
-static LmHandlerParams_t LmParameters;
-static LmHandlerCallbacks_t LmCallbacks;
+static QueueHandle_t lorawan_transmit_queue;
 
-static LmhpComplianceParams_t LmComplianceParams;
+uint8_t AppDataBuffer[LORAWAN_APP_DATA_BUFFER_MAX_SIZE];
 
-static volatile bool TransmitPending = false;
-static volatile bool MacProcessing = false;
-static volatile bool ClockSynchronized = false;
-static volatile bool McSessionStarted = false;
+static volatile uint8_t IsMacProcessPending = 0;
+static volatile uint8_t IsTxFramePending    = 0;
 
-/*
- * Board ID is called by the LoRaWAN stack to
- * uniquely identify this device.
- * 
- * This example uses 4 bytes from the processor ID
- * and another 4 bytes that are user-defined. 
- */
+static LmHandlerCallbacks_t   LmHandlerCallbacks;
+static LmHandlerParams_t      LmHandlerParams;
+static LmhpComplianceParams_t LmhpComplianceParams;
+static LmHandlerAppData_t     LmHandlerAppData;
+
+static void lorawan_handler();
+
+static void UplinkProcess(void);
+
+static void OnMacProcessNotify(void);
+static void OnNvmDataChange(LmHandlerNvmContextStates_t state, uint16_t size);
+static void OnNetworkParametersChange(CommissioningParams_t *params);
+static void OnMacMcpsRequest(LoRaMacStatus_t status, McpsReq_t *mcpsReq,
+                             TimerTime_t nextTxIn);
+static void OnMacMlmeRequest(LoRaMacStatus_t status, MlmeReq_t *mlmeReq,
+                             TimerTime_t nextTxIn);
+static void OnJoinRequest(LmHandlerJoinParams_t *params);
+static void OnTxData(LmHandlerTxParams_t *params);
+static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params);
+static void OnClassChange(DeviceClass_t deviceClass);
+static void OnBeaconStatusChange(LoRaMAcHandlerBeaconParams_t *params);
+static void OnSysTimeUpdate(bool isSynchronized, int32_t timeCorrection);
+
 void BoardGetUniqueId(uint8_t *id)
 {
-  am_util_id_t i;
+    am_util_id_t i;
 
-  am_util_id_device(&i);
-
-  id[0] = 0x01;
-  id[1] = 0x02;
-  id[2] = 0x03;
-  id[3] = 0x04;
-  id[4] = (uint8_t) (i.sMcuCtrlDevice.ui32ChipID0);
-  id[5] = (uint8_t) (i.sMcuCtrlDevice.ui32ChipID0 >> 8);
-  id[6] = (uint8_t) (i.sMcuCtrlDevice.ui32ChipID0 >> 16);
-  id[7] = (uint8_t) (i.sMcuCtrlDevice.ui32ChipID0 >> 24);
+    am_util_id_device(&i);
+    id[0] = 0x01;
+    id[1] = 0x02;
+    id[2] = 0x03;
+    id[3] = 0x04;
+    id[4] = (uint8_t)(i.sMcuCtrlDevice.ui32ChipID0);
+    id[5] = (uint8_t)(i.sMcuCtrlDevice.ui32ChipID0 >> 8);
+    id[6] = (uint8_t)(i.sMcuCtrlDevice.ui32ChipID0 >> 16);
+    id[7] = (uint8_t)(i.sMcuCtrlDevice.ui32ChipID0 >> 24);
 }
 
-static void TclProcessCommand(LmHandlerAppData_t *appData)
+void lorawan_join()
 {
-	// Only handle the reset command as that is indicative of the
-	// beginning of compliance testing.  All the other compliance test
-	// commands are handle by the Compliance state machine
-    switch(appData->Buffer[0])
-    {
-    case 0x01:
-        am_util_stdio_printf("Tcl: LoRaWAN MAC layer reset requested\r\n");
-    	break;
-    case 0x05:
-        am_util_stdio_printf("Tcl: Duty cycle set to %d\r\n", appData->Buffer[1]);
-        break;
-    }
+    task_message_t task_message;
+    task_message.ui32Event = LORAWAN_EVENT_JOIN;
+    xQueueSend(lorawan_task_queue, &task_message, portMAX_DELAY);
 }
 
-/*
- * LoRaMAC Application Layer Callbacks
- */
-static void OnClassChange(DeviceClass_t deviceClass)
+void lorawan_send(lorawan_transaction_t *transaction)
 {
-    DisplayClassUpdate(deviceClass);
-    switch (deviceClass)
-    {
-    default:
-    case CLASS_A:
-    {
-    	McSessionStarted = false;
-    }
-    	break;
-    case CLASS_B:
-    {
-    	LmHandlerAppData_t appData = { .Buffer = NULL, .BufferSize = 0, .Port = 0, };
-    	LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG);
-    	McSessionStarted = true;
-    }
-    	break;
-    case CLASS_C:
-    {
-    	McSessionStarted = true;
-    }
-    	break;
-    }
-}
-
-static void OnMacProcess(void)
-{
-    // this is called inside an IRQ
-    MacProcessing = true;
-}
-
-static void OnJoinRequest(LmHandlerJoinParams_t *params)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayJoinRequestUpdate(params);
-
-    if (params->Status == LORAMAC_HANDLER_ERROR) {
-        LmHandlerJoin();
-    } else {
-        am_util_stdio_printf("LoRaWAN join successful\r\n\r\n");
-
-        LmAppData.Port = LM_APPLICATION_PORT;
-        LmAppData.BufferSize = 0;
-        LmAppData.Buffer = psLmDataBuffer;
-
-        task_message_t TaskMessage;
-        TaskMessage.ui32Event = SEND;
-        TaskMessage.psContent = &LmAppData;
-        xQueueSend(LoRaWANTaskQueue, &TaskMessage, portMAX_DELAY);
-    }
-
-    nm_console_print_prompt();
-}
-
-static void OnMacMlmeRequest(LoRaMacStatus_t status, MlmeReq_t *mlmeReq,
-                             TimerTime_t nextTxDelay)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayMacMlmeRequestUpdate(status, mlmeReq, nextTxDelay);
-    nm_console_print_prompt();
-}
-
-static void OnMacMcpsRequest(LoRaMacStatus_t status, McpsReq_t *mcpsReq,
-                             TimerTime_t nextTxDelay)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayMacMcpsRequestUpdate(status, mcpsReq, nextTxDelay);
-    nm_console_print_prompt();
-}
-
-static void OnNetworkParametersChange(CommissioningParams_t *params)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayNetworkParametersUpdate(params);
-    nm_console_print_prompt();
-}
-
-static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayRxUpdate(appData, params);
-    nm_console_print_prompt();
-
-    switch (appData->Port) {
-    case 0:
-        am_util_stdio_printf("MAC command received\r\n");
-    	break;
-
-    case 3:
-        if (appData->BufferSize == 1) {
-            switch (appData->Buffer[0]) {
-            case 0:
-                LmHandlerRequestClass(CLASS_A);
-                break;
-            case 1:
-                LmHandlerRequestClass(CLASS_B);
-                break;
-            case 2:
-                LmHandlerRequestClass(CLASS_C);
-                break;
-            default:
-                break;
-            }
-        }
-        break;
-
-    case LM_APPLICATION_PORT:
-    {
-    }
-        break;
-
-    case 224:
-    	TclProcessCommand(appData);
-    	break;
-    }
-}
-
-static void OnSysTimeUpdate( bool isSynchronized, int32_t timeCorrection )
-{
-	ClockSynchronized = isSynchronized;
-}
-
-static void OnTxData(LmHandlerTxParams_t *params)
-{
-    am_util_stdio_printf("\r\n");
-    DisplayTxUpdate(params);
-    nm_console_print_prompt();
-}
-
-static void lorawan_handle_uplink()
-{
-	if (TransmitPending) {
-		if (LmHandlerIsBusy() == true) {
-			return;
-		}
-
-		TransmitPending = false;
-
-	    LmAppData.Port = LM_APPLICATION_PORT;
-
-		LmHandlerSend(&LmAppData, LORAMAC_HANDLER_UNCONFIRMED_MSG);
-    }
-}
-
-static void lorawan_handle_command()
-{
-    task_message_t TaskMessage;
-
-    // do not block on message receive as the LoRa MAC state machine decides
-    // when it is appropriate to sleep.  We also do not explicitly go to
-    // sleep directly and simply do a task yield.  This allows other timing
-    // critical radios such as BLE to run their state machines.
-    if (xQueueReceive(LoRaWANTaskQueue, &TaskMessage, 0) == pdPASS) {
-        switch (TaskMessage.ui32Event) {
-        case JOIN:
-            LmHandlerJoin();
-            break;
-        case SEND:
-            TransmitPending = true;
-            break;
-        }
-    }
+    xQueueSend(lorawan_transmit_queue, transaction, portMAX_DELAY);
 }
 
 static void lorawan_setup()
@@ -281,72 +118,183 @@ static void lorawan_setup()
     BoardInitMcu();
     BoardInitPeriph();
 
-    LmParameters.Region = LORAMAC_REGION_US915;
-    LmParameters.AdrEnable = true;
-    LmParameters.TxDatarate = DR_3;
-    LmParameters.PublicNetworkEnable = true;
-    LmParameters.DataBufferMaxSize = LM_BUFFER_SIZE;
-    LmParameters.DataBuffer = psLmDataBuffer;
+    LmHandlerCallbacks.GetBatteryLevel           = BoardGetBatteryLevel;
+    LmHandlerCallbacks.GetTemperature            = NULL;
+    LmHandlerCallbacks.GetRandomSeed             = BoardGetRandomSeed;
+    LmHandlerCallbacks.OnMacProcess              = OnMacProcessNotify;
+    LmHandlerCallbacks.OnNvmDataChange           = OnNvmDataChange;
+    LmHandlerCallbacks.OnNetworkParametersChange = OnNetworkParametersChange;
+    LmHandlerCallbacks.OnMacMcpsRequest          = OnMacMcpsRequest;
+    LmHandlerCallbacks.OnMacMlmeRequest          = OnMacMlmeRequest;
+    LmHandlerCallbacks.OnJoinRequest             = OnJoinRequest;
+    LmHandlerCallbacks.OnTxData                  = OnTxData;
+    LmHandlerCallbacks.OnRxData                  = OnRxData;
+    LmHandlerCallbacks.OnClassChange             = OnClassChange;
+    LmHandlerCallbacks.OnBeaconStatusChange      = OnBeaconStatusChange;
+    LmHandlerCallbacks.OnSysTimeUpdate           = OnSysTimeUpdate;
 
-    switch (LmParameters.Region) {
-    case LORAMAC_REGION_EU868:
-    case LORAMAC_REGION_RU864:
-    case LORAMAC_REGION_CN779:
-        LmParameters.DutyCycleEnabled = true;
-        break;
-    default:
-        LmParameters.DutyCycleEnabled = false;
-        break;
-    }
+    LmHandlerParams.Region              = ACTIVE_REGION;
+    LmHandlerParams.AdrEnable           = LORAWAN_ADR_STATE;
+    LmHandlerParams.TxDatarate          = LORAWAN_DEFAULT_DATARATE;
+    LmHandlerParams.PublicNetworkEnable = LORAWAN_PUBLIC_NETWORK;
+    LmHandlerParams.DutyCycleEnabled    = LORAWAN_DUTYCYCLE_ON;
+    LmHandlerParams.DataBufferMaxSize   = LORAWAN_APP_DATA_BUFFER_MAX_SIZE;
+    LmHandlerParams.DataBuffer          = AppDataBuffer;
 
-    memset(&LmCallbacks, 0, sizeof(LmHandlerCallbacks_t));
-    // these are mandatory
-    LmCallbacks.OnMacProcess = OnMacProcess;
-    LmCallbacks.OnJoinRequest = OnJoinRequest;
-    LmCallbacks.OnNetworkParametersChange = OnNetworkParametersChange;
-    LmCallbacks.OnMacMlmeRequest = OnMacMlmeRequest;
-    LmCallbacks.OnMacMcpsRequest = OnMacMcpsRequest;
-    LmCallbacks.OnSysTimeUpdate = OnSysTimeUpdate;
-    LmCallbacks.OnTxData = OnTxData;
-    LmCallbacks.OnRxData = OnRxData;
-    LmCallbacks.OnClassChange = OnClassChange;
+    LmhpComplianceParams.AdrEnabled       = LORAWAN_ADR_STATE;
+    LmhpComplianceParams.DutyCycleEnabled = LORAWAN_DUTYCYCLE_ON;
+    LmhpComplianceParams.StopPeripherals  = NULL;
+    LmhpComplianceParams.StartPeripherals = NULL;
 
-    LmHandlerInit(&LmCallbacks, &LmParameters);
+    LmHandlerAppData.Buffer     = AppDataBuffer;
+    LmHandlerAppData.BufferSize = 0;
+    LmHandlerAppData.Port       = 0;
+
+    LmHandlerInit(&LmHandlerCallbacks, &LmHandlerParams);
     LmHandlerSetSystemMaxRxError(20);
-
-    LmHandlerPackageRegister(PACKAGE_ID_COMPLIANCE,
-                             &LmComplianceParams);
-
-    LmHandlerPackageRegister(PACKAGE_ID_CLOCK_SYNC,
-                             NULL);
-
-    LmHandlerPackageRegister(PACKAGE_ID_REMOTE_MCAST_SETUP,
-                             NULL);
+    LmHandlerPackageRegister(PACKAGE_ID_COMPLIANCE, &LmhpComplianceParams);
 }
 
 void lorawan_task(void *pvParameters)
 {
     FreeRTOS_CLIRegisterCommand(&LoRaWANCommandDefinition);
-    LoRaWANTaskQueue = xQueueCreate(10, sizeof(task_message_t));
-
-    am_util_stdio_printf("\r\n\r\nLoRaWAN Application State Machine Started\r\n\r\n");
-    nm_console_print_prompt();
+    lorawan_task_queue = xQueueCreate(10, sizeof(task_message_t));
+    lorawan_transmit_queue = xQueueCreate(10, sizeof(lorawan_transaction_t));
 
     lorawan_setup();
 
-    TransmitPending = false;
     while (1) {
-        lorawan_handle_command();
-        lorawan_handle_uplink();
+        lorawan_handler();
         LmHandlerProcess();
+        UplinkProcess();
 
-        if (MacProcessing) {
-            taskENTER_CRITICAL();
-            MacProcessing = 0;
-            taskEXIT_CRITICAL();
-        } else {
-            taskYIELD();
+        taskENTER_CRITICAL();
+        if (IsMacProcessPending) {
+            IsMacProcessPending = 0;
+        }
+        else
+        {
+        	taskYIELD();
+        }
+        taskEXIT_CRITICAL();
+    }
+}
+
+static void OnMacProcessNotify(void)
+{
+    IsMacProcessPending = 1;
+}
+
+static void OnNvmDataChange(LmHandlerNvmContextStates_t state, uint16_t size)
+{
+    DisplayNvmDataChange(state, size);
+}
+
+static void OnNetworkParametersChange(CommissioningParams_t *params)
+{
+    DisplayNetworkParametersUpdate(params);
+}
+
+static void OnMacMcpsRequest(LoRaMacStatus_t status, McpsReq_t *mcpsReq,
+                             TimerTime_t nextTxIn)
+{
+    DisplayMacMcpsRequestUpdate(status, mcpsReq, nextTxIn);
+}
+
+static void OnMacMlmeRequest(LoRaMacStatus_t status, MlmeReq_t *mlmeReq,
+                             TimerTime_t nextTxIn)
+{
+    DisplayMacMlmeRequestUpdate(status, mlmeReq, nextTxIn);
+}
+
+static void OnJoinRequest(LmHandlerJoinParams_t *params)
+{
+    DisplayJoinRequestUpdate(params);
+    if (params->Status == LORAMAC_HANDLER_ERROR) {
+        LmHandlerJoin();
+    } else {
+        LmHandlerRequestClass(LORAWAN_DEFAULT_CLASS);
+    }
+}
+
+static void OnTxData(LmHandlerTxParams_t *params)
+{
+    DisplayTxUpdate(params);
+}
+
+static void OnRxData(LmHandlerAppData_t *appData, LmHandlerRxParams_t *params)
+{
+    DisplayRxUpdate(appData, params);
+
+    switch (appData->Port) {
+    case LORAWAN_APP_PORT:
+        break;
+    default:
+        break;
+    }
+}
+
+static void OnClassChange(DeviceClass_t deviceClass)
+{
+    DisplayClassUpdate(deviceClass);
+
+    LmHandlerAppData_t appData = {.Buffer = NULL, .BufferSize = 0, .Port = 0};
+    LmHandlerSend(&appData, LORAMAC_HANDLER_UNCONFIRMED_MSG);
+}
+
+static void OnBeaconStatusChange(LoRaMAcHandlerBeaconParams_t *params)
+{
+    switch (params->State) {
+    case LORAMAC_HANDLER_BEACON_RX:
+    case LORAMAC_HANDLER_BEACON_LOST:
+    case LORAMAC_HANDLER_BEACON_NRX:
+    default:
+        break;
+    }
+
+    DisplayBeaconUpdate(params);
+}
+
+static void OnSysTimeUpdate(bool isSynchronized, int32_t timeCorrection)
+{
+}
+
+static void UplinkProcess(void)
+{
+    lorawan_transaction_t transaction;
+    if (xQueuePeek(lorawan_transmit_queue, &transaction, 0) == pdPASS)
+    {
+        if (LmHandlerIsBusy() == true)
+        {
+            return;
+        }
+
+        if (xQueueReceive(lorawan_transmit_queue, &transaction, 0) == pdPASS)
+        {
+            LmHandlerAppData.Port = transaction.port;
+            LmHandlerAppData.BufferSize = transaction.length;
+            LmHandlerAppData.Buffer = transaction.buffer;
+
+            LmHandlerSend(&LmHandlerAppData, transaction.message_type);
         }
     }
 }
+
+static void lorawan_handler()
+{
+    task_message_t task_message;
+
+    // do not block on message receive as the LoRa MAC state machine decides
+    // when it is appropriate to sleep.  We also do not explicitly go to
+    // sleep directly and simply do a task yield.  This allows other timing
+    // critical radios such as BLE to run their state machines.
+    if (xQueueReceive(lorawan_task_queue, &task_message, 0) == pdPASS) {
+        switch (task_message.ui32Event) {
+        case LORAWAN_EVENT_JOIN:
+            LmHandlerJoin();
+            break;
+        }
+    }
+}
+
 
