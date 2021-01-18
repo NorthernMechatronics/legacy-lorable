@@ -165,7 +165,7 @@ void ble_task(void *pvParameters)
 {
     NVIC_SetPriority(BLE_IRQn, NVIC_configMAX_SYSCALL_INTERRUPT_PRIORITY);
 
-    am_util_stdio_printf("\r\n\r\nBLE Task Started\r\n\r\n");
+    am_util_stdio_printf("\r\n\r\nBLE Task Started 2.0\r\n\r\n");
     nm_console_print_prompt();
 
     HciDrvRadioBoot(1);
@@ -174,7 +174,6 @@ void ble_task(void *pvParameters)
     AmotaStart();
     while (1) {
         wsfOsDispatcher();
-    	taskYIELD();
     }
 }
 
