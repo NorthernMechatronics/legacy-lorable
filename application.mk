@@ -22,13 +22,23 @@ BSP_DIR := $(NM_SDK)/bsp/nm180100evb
 #******************************************************************************
 #
 # Step 3
-# Specify output target name
+# Specify output target name and target version
+#
+# When the on-chip bootloader is enabled (either for wired update or over the
+# air update), the target version must be the same as the version number
+# specified in the info0 region or the device will not boot properly.
 #
 #******************************************************************************
+TARGET_VERSION := 0x00
+
 ifdef DEBUG
-    TARGET   := lorable-dev
+    TARGET      := lorable-dev
+    TARGET_OTA  := lorable_ota-dev
+    TARGET_WIRE := lorable_wire-dev
 else
-    TARGET   := lorable
+    TARGET      := lorable
+    TARGET_OTA  := lorable_ota
+    TARGET_WIRE := lorable_wire
 endif
 
 #******************************************************************************
