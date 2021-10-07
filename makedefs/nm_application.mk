@@ -3,7 +3,7 @@ INCLUDES += -I$(AMBIQ_SDK)/mcu/apollo3/hal
 INCLUDES += -I$(AMBIQ_SDK)/CMSIS/AmbiqMicro/Include
 INCLUDES += -I$(AMBIQ_SDK)/CMSIS/ARM/Include
 INCLUDES += -I$(AMBIQ_SDK)/utils
-INCLUDES += -I$(FREERTOS)/Source/include
+INCLUDES += -I$(FREERTOS)/include
 INCLUDES += -I$(NM_SDK)/features/FreeRTOS
 INCLUDES += -I$(NM_SDK)/features/FreeRTOS-Plus-CLI
 
