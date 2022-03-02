@@ -69,6 +69,7 @@
 #include "app_ui.h"
 
 #include "ble.h"
+#include "amota_cli.h"
 #include "console_task.h"
 #include "task_message.h"
 
@@ -163,6 +164,8 @@ void ble_cordio_init(void)
 
 void ble_task(void *pvParameters)
 {
+    FreeRTOS_CLIRegisterCommand(&amota_command_definition);
+
     NVIC_SetPriority(BLE_IRQn, NVIC_configMAX_SYSCALL_INTERRUPT_PRIORITY);
 
     am_util_stdio_printf("\r\n\r\nBLE Task Started 2.0\r\n\r\n");

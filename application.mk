@@ -6,7 +6,7 @@
 #******************************************************************************
 NM_SDK    ?= $(shell pwd)/../nmsdk
 AMBIQ_SDK ?= $(shell pwd)/../AmbiqSuite-R2.5.1
-FREERTOS  ?= $(shell pwd)/../FreeRTOS-Kernel
+FREERTOS  ?= $(shell pwd)/../FreeRTOS-Kernel/FreeRTOS/Source
 CORDIO    ?= $(shell pwd)/../AmbiqSuite-R2.5.1/third_party/cordio
 UECC      ?= $(shell pwd)/../AmbiqSuite-R2.5.1/third_party/uecc
 LORAMAC   ?= $(shell pwd)/../LoRaMac-node
@@ -98,3 +98,5 @@ SRC += ble.c
 SRC += lorawan.c
 SRC += lorawan_cli.c
 SRC += application.c
+
+SRC += amota_cli.c
